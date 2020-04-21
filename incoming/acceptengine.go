@@ -3,20 +3,22 @@ package incoming
 import (
 	"context"
 	"evtcp/message"
-	"fmt"
 	"log"
 	"net"
 	"strconv"
 )
 
-var ConnList map[string]*net.TCPConn = make(map[string]*net.TCPConn)
-var connChannel chan *net.TCPConn = make(chan *net.TCPConn)
+var ConnList = make(map[string]*net.TCPConn)
+
+//var connChannel chan *net.TCPConn = make(chan *net.TCPConn)
+var connCount = 5000
+var connPool = make(chan bool, connCount)
 
 type AcceptEngine struct {
 	Host     string
 	Port     int
 	listener *net.TCPListener
-	cancel context.CancelFunc
+	cancel   context.CancelFunc
 }
 
 func (aEngine *AcceptEngine) Run(incomingChannel chan *message.MessagePack) {
@@ -24,8 +26,11 @@ func (aEngine *AcceptEngine) Run(incomingChannel chan *message.MessagePack) {
 	aEngine.listener = listener
 	ctx, cancel := context.WithCancel(context.Background())
 	aEngine.cancel = cancel
-	go ConnectionAccept(ctx, listener, connChannel)
-	go HandleConn(ctx, connChannel, incomingChannel)
+	for i := 0; i < connCount; i++ {
+		connPool <- true
+	}
+	go ConnectionAccept(ctx, listener, incomingChannel)
+	//go HandleConn(ctx, connChannel, incomingChannel)
 }
 
 func listenerInit(host string, port int) (*net.TCPListener, error) {
@@ -42,47 +47,52 @@ func listenerInit(host string, port int) (*net.TCPListener, error) {
 	return listener, nil
 }
 
-func ConnectionAccept(ctx context.Context, listener *net.TCPListener, connChannel chan *net.TCPConn) {
+func ConnectionAccept(ctx context.Context, listener *net.TCPListener, incomingChannel chan *message.MessagePack) {
+	log.Println("Wating connection ....")
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("Engine stop to accept new connection")
+			log.Println("Engine stop to accept new connection")
 			return
-		default:
+		case <-connPool:
 			connection, err := listener.AcceptTCP()
 			if err != nil {
-				fmt.Println("Accept 失败: " + err.Error())
+				log.Println("Accept 失败: " + err.Error())
 			} else {
-				connChannel <- connection
+				remoteAddr := connection.RemoteAddr()
+				remoteAddrStr := remoteAddr.String()
+				ConnList[remoteAddrStr] = connection
+				log.Println("Client " + remoteAddrStr + " connected")
+				go readConn(ctx, connection, incomingChannel, connPool)
 			}
 		}
 	}
 }
 
-func HandleConn(ctx context.Context, connChannel chan *net.TCPConn, incomingChannel chan *message.MessagePack) {
-	fmt.Println("Wating connection ....")
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Println("Handle Conn stop process")
-			return
-		case conn := <-connChannel:
-			remoteAddr := conn.RemoteAddr()
-			remoteAddrStr := remoteAddr.String()
-			ConnList[remoteAddrStr] = conn
-			fmt.Println("Client " + remoteAddrStr + " connected")
-			go readConn(ctx, conn, incomingChannel)
-		}
-	}
-}
+//func HandleConn(ctx context.Context, connChannel chan *net.TCPConn, incomingChannel chan *message.MessagePack) {
+//	fmt.Println("Wating connection ....")
+//	for {
+//		select {
+//		case <-ctx.Done():
+//			fmt.Println("Handle Conn stop process")
+//			return
+//		case conn := <-connChannel:
+//			remoteAddr := conn.RemoteAddr()
+//			remoteAddrStr := remoteAddr.String()
+//			ConnList[remoteAddrStr] = conn
+//			fmt.Println("Client " + remoteAddrStr + " connected")
+//			go readConn(ctx, conn, incomingChannel)
+//		}
+//	}
+//}
 
 func (aEngine *AcceptEngine) Stop() {
 	aEngine.cancel()
 	listener := aEngine.listener
 	(*listener).Close()
-	fmt.Println("Listener closed")
+	log.Println("Listener closed")
 	for remoteAddr, conn := range ConnList {
-		fmt.Println("accept engine close read func with Client " + remoteAddr)
+		log.Println("accept engine close read func with Client " + remoteAddr)
 		(*conn).CloseRead()
 	}
 }

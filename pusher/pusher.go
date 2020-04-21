@@ -43,7 +43,10 @@ func (p *Pusher) processRequest(request *message.MessagePack) error {
 	connInfo := request.ConnPoint
 	hostRevertStr := string(request.Content)
 	hostRevertPackerByte := message.Packet(hostRevertStr)
-	(*connInfo).Write(hostRevertPackerByte)
+	_, err := (*connInfo).Write(hostRevertPackerByte)
+	if err != nil {
+		return err
+	}
 	remoteAddr := (*connInfo).RemoteAddr()
 	log.Printf("revert to Client ID %s with message: %s\n", remoteAddr, hostRevertStr)
 	return nil
